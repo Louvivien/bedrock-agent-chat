@@ -43,6 +43,16 @@ def invoke_agent_stream(prompt: str, session_id: str):
         if "chunk" in event:
             yield event["chunk"]["bytes"].decode("utf-8", errors="ignore")
 
+# -- KaTeX-safe Markdown helper --
+def escape_katex(md: str) -> str:
+    return (
+        md.replace("$", r"\$")
+          .replace(r"\(", r"\\(")
+          .replace(r"\)", r"\\)")
+          .replace(r"\[", r"\\[")
+          .replace(r"\]", r"\\]")
+    )
+
 st.set_page_config(page_title="Bedrock Agent Chat", page_icon="🤖", layout="centered")
 
 st.title("🤖 Bedrock Agent Chat (Streamlit)")
@@ -61,7 +71,7 @@ if "messages" not in st.session_state:
 # Render history
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+        st.markdown(escape_katex(m["content"]))
 
 # --- Quick prompts (click to auto-ask) ---
 quick_prompts = [
@@ -90,11 +100,11 @@ if q:
     st.session_state["_queued_user_msgs"] = q
 else:
     user_input = typed_input
-# (line after)
+
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.markdown(escape_katex(user_input))
 
     with st.chat_message("assistant"):
         placeholder = st.empty()
@@ -102,10 +112,10 @@ if user_input:
         try:
             for chunk in invoke_agent_stream(user_input, st.session_state.session_id):
                 acc += chunk
-                placeholder.markdown(acc + "▌")
+                placeholder.markdown(escape_katex(acc) + "▌")
         except ClientError as e:
             acc = f"⚠️ AWS error: {e}"
         except Exception as e:
             acc = f"⚠️ Runtime error: {e}"
-        placeholder.markdown(acc)
+        placeholder.markdown(escape_katex(acc))
     st.session_state.messages.append({"role": "assistant", "content": acc})
