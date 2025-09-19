@@ -63,7 +63,33 @@ for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
 
-user_input = st.chat_input("Ask me anything…")
+# --- Quick prompts (click to auto-ask) ---
+quick_prompts = [
+    "🧾 Summarize account",
+    "💳 Check billing & payments",
+    "📊 Analyze usage; recommend plan/booster",
+    "🚨 Spot risks; suggest actions",
+    "🎟️ Review tickets; propose next steps",
+]
+
+cols = st.columns(len(quick_prompts))
+clicked = None
+for i, label in enumerate(quick_prompts):
+    if cols[i].button(label, use_container_width=True, key=f"qp_{i}"):
+        clicked = label
+
+# If a quick prompt is clicked, stash it and rerun to process as if typed
+if clicked:
+    st.session_state["_qp_clicked_text"] = clicked
+    st.session_state["_send_clicked_prompt"] = True
+    st.rerun()
+
+# Read input: use clicked prompt once, otherwise wait for chat_input
+user_input = (
+    st.session_state.pop("_qp_clicked_text", None)
+    if st.session_state.pop("_send_clicked_prompt", False)
+    else st.chat_input("Ask me anything…")
+)
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
