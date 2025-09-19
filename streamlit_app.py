@@ -36,7 +36,6 @@ def invoke_agent_stream(prompt: str, session_id: str, session_attrs: dict | None
             "streamFinalResponse": STREAM_FINAL,
         },
     )
-    # Attach session attributes only if we actually have overrides
     if session_attrs:
         kwargs["sessionState"] = {"sessionAttributes": session_attrs}
     resp = client.invoke_agent(**kwargs)
@@ -65,12 +64,13 @@ def escape_katex(md: str) -> str:
 st.set_page_config(page_title="Bedrock Agent Chat", page_icon="🤖", layout="centered")
 
 # ---------- Collapsed parameter panels (prefilled & collapsed) ----------
-# We keep values in session_state so they persist across interactions.
+# Persist values across interactions.
 if "overrides" not in st.session_state:
     st.session_state.overrides = {
         "jwt": "",                    # leave empty to use Lambda STATIC_JWT
-        # goodwill params (leave empty to let Lambda defaults win)
+        # Global customer context (used by DTO default path AND goodwill)
         "customerOuid": "",
+        # Goodwill-specific params (leave empty to let Lambda defaults/DTO resolver win)
         "billingAccountOuid": "",
         "parentOuid": "",
         "offeringOuid": "",
@@ -85,20 +85,26 @@ if "use_overrides" not in st.session_state:
 with st.expander("🔐 Auth (JWT token) — collapsed by default", expanded=False):
     st.caption("Leave empty to rely on Lambda’s STATIC_JWT")
     st.session_state.overrides["jwt"] = st.text_input(
-        "JWT (include 'Bearer ...' if you want to override)",
+        "JWT (include 'Bearer …' if you want to override)",
         value=st.session_state.overrides.get("jwt", ""),
         placeholder="Bearer eyJhbGciOiJIUzUxMiJ9.…",
     )
 
+# -- line before --
+with st.expander("👤 Customer context — collapsed by default", expanded=False):
+    st.caption("This customerOuid is used by ALL calls. "
+               "For DTO without an ID, Lambda will use this first; if empty, it falls back to the Lambda default.")
+    st.session_state.overrides["customerOuid"] = st.text_input(
+        "customerOuid (applies to both DTO and goodwill)",
+        value=st.session_state.overrides.get("customerOuid", ""),
+        placeholder="8B0B07E340842EDF73EBD6DE1208C1C3",
+    )
+# -- line after --
+
 with st.expander("🎁 Goodwill parameters — collapsed by default", expanded=False):
-    st.caption("Fill any you want to override. Empty fields are ignored so Lambda defaults still apply.")
+    st.caption("Fill any you want to override. Empty fields are ignored so Lambda defaults or DTO-based resolution still apply.")
     col1, col2 = st.columns(2)
     with col1:
-        st.session_state.overrides["customerOuid"] = st.text_input(
-            "customerOuid",
-            value=st.session_state.overrides.get("customerOuid", ""),
-            placeholder="8B0B07E340842EDF73EBD6DE1208C1C3",
-        )
         st.session_state.overrides["parentOuid"] = st.text_input(
             "parentOuid (subscription as PARENT)",
             value=st.session_state.overrides.get("parentOuid", ""),
@@ -110,7 +116,7 @@ with st.expander("🎁 Goodwill parameters — collapsed by default", expanded=F
             placeholder="8B3C73498520F7048BC00F449DBAE447",
         )
         st.session_state.overrides["msisdn"] = st.text_input(
-            "msisdn (prefer this if you want Lambda to auto-resolve the line)",
+            "msisdn (prefer this to let Lambda auto-resolve the line)",
             value=st.session_state.overrides.get("msisdn", ""),
             placeholder="0613423341",
         )
@@ -141,24 +147,33 @@ with st.expander("🎁 Goodwill parameters — collapsed by default", expanded=F
 st.session_state.use_overrides = st.checkbox(
     "Use these overrides in calls (send as sessionAttributes)",
     value=st.session_state.use_overrides,
-    help="When enabled, only non-empty fields are sent; empty fields are omitted so Lambda defaults win."
+    help="When enabled, only non-empty fields are sent; empty fields are omitted so Lambda defaults can win.",
 )
 
-# Helper: build the sessionAttributes dict with only non-empty values
 def build_session_attributes() -> dict:
+    """
+    Build sessionAttributes sent to Bedrock.
+    - If 'Use these overrides' is OFF -> return {} (nothing sent; Lambda defaults apply).
+    - If ON -> include only non-empty fields.
+    Critical: customerOuid is global (applies to both DTO and goodwill).
+    """
     if not st.session_state.use_overrides:
         return {}
     o = st.session_state.overrides
     attrs = {}
-    # Map exactly to what the Lambda expects in sessionAttributes
-    if o.get("jwt"):                   attrs["jwt"] = o["jwt"]
-    if o.get("customerOuid"):          attrs["customerOuid"] = o["customerOuid"]
-    if o.get("billingAccountOuid"):    attrs["billingAccountOuid"] = o["billingAccountOuid"]
-    if o.get("parentOuid"):            attrs["parentOuid"] = o["parentOuid"]
-    if o.get("offeringOuid"):          attrs["offeringOuid"] = o["offeringOuid"]
-    if o.get("specOuid"):              attrs["specOuid"] = o["specOuid"]
-    if o.get("msisdn"):                attrs["msisdn"] = o["msisdn"]
-    # Always send goodwillSizeGb / goodwillReason if overrides enabled
+
+    # Global
+    if o.get("jwt"):            attrs["jwt"] = o["jwt"]
+    if o.get("customerOuid"):   attrs["customerOuid"] = o["customerOuid"]
+
+    # Goodwill-specific (optional)
+    if o.get("billingAccountOuid"):  attrs["billingAccountOuid"] = o["billingAccountOuid"]
+    if o.get("parentOuid"):          attrs["parentOuid"] = o["parentOuid"]
+    if o.get("offeringOuid"):        attrs["offeringOuid"] = o["offeringOuid"]
+    if o.get("specOuid"):            attrs["specOuid"] = o["specOuid"]
+    if o.get("msisdn"):              attrs["msisdn"] = o["msisdn"]
+
+    # Always include goodwill size/reason if overrides enabled (safe defaults)
     try:
         size = int(o.get("goodwillSizeGb", 2))
         if size < 1: size = 1
@@ -167,6 +182,7 @@ def build_session_attributes() -> dict:
         attrs["goodwillSizeGb"] = "2"
     if o.get("goodwillReason"):
         attrs["goodwillReason"] = o["goodwillReason"]
+
     return attrs
 
 st.title("🤖 Bedrock Agent Chat (Streamlit)")
