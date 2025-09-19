@@ -67,29 +67,30 @@ for m in st.session_state.messages:
 quick_prompts = [
     "🧾 Summarize account",
     "💳 Check billing & payments",
-    "📊 Analyze usage; recommend plan/booster",
+    "📊 Analyze consumption; recommend plan/booster",  # <- updated label
     "🚨 Spot risks; suggest actions",
     "🎟️ Review tickets; propose next steps",
 ]
 
 cols = st.columns(len(quick_prompts))
-clicked = None
 for i, label in enumerate(quick_prompts):
     if cols[i].button(label, use_container_width=True, key=f"qp_{i}"):
-        clicked = label
+        q = st.session_state.get("_queued_user_msgs", [])
+        q.append(label)
+        st.session_state["_queued_user_msgs"] = q
+        st.rerun()
 
-# If a quick prompt is clicked, stash it and rerun to process as if typed
-if clicked:
-    st.session_state["_qp_clicked_text"] = clicked
-    st.session_state["_send_clicked_prompt"] = True
-    st.rerun()
+# Always render the chat input so it never disappears
+typed_input = st.chat_input("Ask me anything…")
 
-# Read input: use clicked prompt once, otherwise wait for chat_input
-user_input = (
-    st.session_state.pop("_qp_clicked_text", None)
-    if st.session_state.pop("_send_clicked_prompt", False)
-    else st.chat_input("Ask me anything…")
-)
+# Use queued quick prompt first, otherwise typed input
+q = st.session_state.get("_queued_user_msgs", [])
+if q:
+    user_input = q.pop(0)
+    st.session_state["_queued_user_msgs"] = q
+else:
+    user_input = typed_input
+# (line after)
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
