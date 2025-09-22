@@ -16,11 +16,11 @@ def bedrock_agent_client():
     # Uses env AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (/ AWS_SESSION_TOKEN)
     return boto3.client("bedrock-agent-runtime", region_name=AWS_REGION)
 
-def invoke_agent_stream(prompt: str, session_id: str, session_attrs: dict | None = None):
+def invoke_agent_stream(prompt: str, session_id: str, session_attrs: dict | None = None, baseline_prompt_attrs: dict | None = None):
     """
     Calls Agents for Bedrock and yields chunks as they arrive.
-    Uses 'invoke_agent' event stream per AWS docs.
-    If session_attrs is provided, it is sent under sessionState.[sessionAttributes + promptSessionAttributes].
+    Sends session_attrs into sessionState.sessionAttributes AND promptSessionAttributes when provided.
+    If overrides are OFF, we still pass a tiny 'baseline_prompt_attrs' (brand/channel/lang) so Lambda can map to headers.
     """
     client = bedrock_agent_client()
 
@@ -36,11 +36,16 @@ def invoke_agent_stream(prompt: str, session_id: str, session_attrs: dict | None
             "streamFinalResponse": STREAM_FINAL,
         },
     )
-    # >>> CHANGE: mirror into both sessionAttributes and promptSessionAttributes <<<
+    # Send both sticky+turn attrs when overrides are ON
     if session_attrs:
         kwargs["sessionState"] = {
-            "sessionAttributes": session_attrs,            # sticky across turns
-            "promptSessionAttributes": session_attrs,      # visible to the current turn/tools
+            "sessionAttributes": session_attrs,           # sticky
+            "promptSessionAttributes": session_attrs,     # turn-scoped
+        }
+    # When overrides are OFF, still provide minimal promptSessionAttributes so Lambda can inject headers
+    elif baseline_prompt_attrs:
+        kwargs["sessionState"] = {
+            "promptSessionAttributes": baseline_prompt_attrs
         }
     resp = client.invoke_agent(**kwargs)
     # -- line after --
@@ -72,6 +77,9 @@ st.set_page_config(page_title="Bedrock Agent Chat", page_icon="🤖", layout="ce
 
 # Prefill customer OUID once (env or hard-coded fallback)
 DEFAULT_CUST = os.getenv("DEFAULT_CUSTOMER_OUID", "1E5A1F564E180BD3EBF02D7D5007DB28")
+DEFAULT_BRAND = os.getenv("DEFAULT_X_BRAND", "DEMO-DEMO")
+DEFAULT_CHANNEL = os.getenv("DEFAULT_X_CHANNEL", "AGENT_TOOL")
+DEFAULT_LANG = os.getenv("DEFAULT_LANG", "en")
 
 # Initialize overrides ONCE (no duplicate blocks)
 if "overrides" not in st.session_state:
@@ -87,6 +95,10 @@ if "overrides" not in st.session_state:
         "msisdn": "",
         "goodwillSizeGb": 2,
         "goodwillReason": "boosterOrPassRefund",
+        # Optional meta
+        "lang": DEFAULT_LANG,
+        "xBrand": DEFAULT_BRAND,
+        "xChannel": DEFAULT_CHANNEL,
     }
 
 # default to ON so attributes are sent unless you turn them off
@@ -111,6 +123,27 @@ with st.expander("👤 Customer context — collapsed by default", expanded=Fals
         placeholder="1E5A1F564E180BD3EBF02D7D5007DB28",
     )
 # -- line after --
+
+with st.expander("🌐 Call context (brand/channel/lang) — collapsed by default", expanded=False):
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.session_state.overrides["xBrand"] = st.text_input(
+            "X-Brand",
+            value=st.session_state.overrides.get("xBrand", DEFAULT_BRAND),
+            placeholder=DEFAULT_BRAND,
+        )
+    with c2:
+        st.session_state.overrides["xChannel"] = st.text_input(
+            "X-Channel",
+            value=st.session_state.overrides.get("xChannel", DEFAULT_CHANNEL),
+            placeholder=DEFAULT_CHANNEL,
+        )
+    with c3:
+        st.session_state.overrides["lang"] = st.selectbox(
+            "Accept-Language",
+            options=["en", "fr"],
+            index=0 if (st.session_state.overrides.get("lang", DEFAULT_LANG) == "en") else 1,
+        )
 
 with st.expander("🎁 Goodwill parameters — collapsed by default", expanded=False):
     st.caption("Fill any you want to override. Empty fields are ignored so Lambda defaults or DTO-based resolution still apply.")
@@ -158,13 +191,13 @@ with st.expander("🎁 Goodwill parameters — collapsed by default", expanded=F
 st.session_state.use_overrides = st.checkbox(
     "Use these overrides in calls (send as sessionAttributes & promptSessionAttributes)",
     value=st.session_state.use_overrides,
-    help="When enabled, only non-empty fields are sent; empty fields are omitted so Lambda defaults can win.",
+    help="ON → send your fields. OFF → send tiny defaults (brand/channel/lang) so Lambda can inject headers.",
 )
 
 def build_session_attributes() -> dict:
     """
-    Build session attributes sent to Bedrock.
-    - If 'Use these overrides' is OFF -> return {} (nothing sent; Lambda defaults apply).
+    Build sessionAttributes sent to Bedrock.
+    - If 'Use these overrides' is OFF -> return {} (lambda defaults apply; we still send minimal prompt attrs elsewhere).
     - If ON -> include only non-empty fields.
     Critical: customerOuid is global (applies to both DTO and goodwill).
     """
@@ -176,6 +209,9 @@ def build_session_attributes() -> dict:
     # Global
     if o.get("jwt"):            attrs["jwt"] = o["jwt"]
     if o.get("customerOuid"):   attrs["customerOuid"] = o["customerOuid"]
+    if o.get("lang"):           attrs["lang"] = o["lang"]
+    if o.get("xBrand"):         attrs["xBrand"] = o["xBrand"]
+    if o.get("xChannel"):       attrs["xChannel"] = o["xChannel"]
 
     # Goodwill-specific (optional)
     if o.get("billingAccountOuid"):  attrs["billingAccountOuid"] = o["billingAccountOuid"]
@@ -196,8 +232,8 @@ def build_session_attributes() -> dict:
 
     return attrs
 
-st.title("🤖 Bedrock Agent Chat (Streamlit)")
-st.caption("Type below to talk to your Bedrock Agent. Deployed on Render.")
+st.title("🤖 AI Assistant")
+st.caption("Type below to talk to your AI Assistant.")
 
 if not AGENT_ID or not ALIAS_ID:
     st.error("Missing AGENT_ID or AGENT_ALIAS_ID environment variables.")
@@ -209,9 +245,6 @@ if "session_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Top banner: show the effective customer OUID being sent
-effective_ouid = st.session_state.overrides.get("customerOuid", "") if st.session_state.use_overrides else "(overrides OFF)"
-st.info(f"Effective customerOuid → {effective_ouid}")
 
 # Render history
 for m in st.session_state.messages:
@@ -258,10 +291,14 @@ if user_input:
             # -- line before --
             session_attrs = build_session_attributes()
 
-            # Guardrail: if overrides are ON but customerOuid is empty → warn & stop
-            if st.session_state.use_overrides and not session_attrs.get("customerOuid"):
-                st.warning("Overrides are ON but 'customerOuid' is empty. Enter a value or turn overrides OFF.")
-                raise RuntimeError("Missing customerOuid while overrides are enabled.")
+            # Build baseline prompt attributes when overrides are OFF
+            baseline_prompt_attrs = None
+            if not st.session_state.use_overrides:
+                baseline_prompt_attrs = {
+                    "xBrand": DEFAULT_BRAND,
+                    "xChannel": DEFAULT_CHANNEL,
+                    "lang": DEFAULT_LANG,
+                }
 
             with st.expander("🧪 Debug — what will be sent", expanded=False):
                 st.write({
@@ -269,10 +306,16 @@ if user_input:
                     "agentId": AGENT_ID,
                     "aliasId": ALIAS_ID,
                     "use_overrides": st.session_state.use_overrides,
-                    "sessionAttributes": session_attrs,   # what we mirror into both
+                    "sessionAttributes": session_attrs,              # sticky+turn (when ON)
+                    "promptDefaultsWhenOff": baseline_prompt_attrs,  # turn-only (when OFF)
                 })
 
-            for chunk in invoke_agent_stream(user_input, st.session_state.session_id, session_attrs):
+            for chunk in invoke_agent_stream(
+                user_input,
+                st.session_state.session_id,
+                session_attrs=session_attrs if session_attrs else None,
+                baseline_prompt_attrs=baseline_prompt_attrs
+            ):
                 acc += chunk
                 placeholder.markdown(escape_katex(acc) + "▌")
             # -- line after --
