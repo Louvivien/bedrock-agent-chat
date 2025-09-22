@@ -72,22 +72,16 @@ def escape_katex(md: str) -> str:
 
 st.set_page_config(page_title="Bedrock Agent Chat", page_icon="🤖", layout="centered")
 
-# ---------- Collapsed parameter panels (prefilled & collapsed) ----------
-# Persist values across interactions.
-
-# Prefill customer OUID once (env or hard-coded fallback)
+# ---------- Prefill & state ----------
 DEFAULT_CUST = os.getenv("DEFAULT_CUSTOMER_OUID", "1E5A1F564E180BD3EBF02D7D5007DB28")
 DEFAULT_BRAND = os.getenv("DEFAULT_X_BRAND", "DEMO-DEMO")
 DEFAULT_CHANNEL = os.getenv("DEFAULT_X_CHANNEL", "AGENT_TOOL")
 DEFAULT_LANG = os.getenv("DEFAULT_LANG", "en")
 
-# Initialize overrides ONCE (no duplicate blocks)
 if "overrides" not in st.session_state:
     st.session_state.overrides = {
-        "jwt": "",                    # leave empty to use Lambda STATIC_JWT
-        # Global customer context (used by DTO default path AND goodwill)
-        "customerOuid": DEFAULT_CUST,  # prefilled (not just placeholder)
-        # Goodwill-specific params (leave empty to let Lambda defaults/DTO resolver win)
+        "jwt": "",
+        "customerOuid": DEFAULT_CUST,
         "billingAccountOuid": "",
         "parentOuid": "",
         "offeringOuid": "",
@@ -95,36 +89,46 @@ if "overrides" not in st.session_state:
         "msisdn": "",
         "goodwillSizeGb": 2,
         "goodwillReason": "boosterOrPassRefund",
-        # Optional meta
         "lang": DEFAULT_LANG,
         "xBrand": DEFAULT_BRAND,
         "xChannel": DEFAULT_CHANNEL,
     }
-
-# default to ON so attributes are sent unless you turn them off
 if "use_overrides" not in st.session_state:
     st.session_state.use_overrides = True
 
-with st.expander("🔐 Auth (JWT token) — collapsed by default", expanded=False):
-    st.caption("Leave empty to rely on Lambda’s STATIC_JWT")
+# =======================
+# ⚙️ UNIFIED SETTINGS UI
+# =======================
+# -- line before --
+with st.expander("⚙️ Settings — collapsed", expanded=False):
+    st.caption("Configure everything here. Toggle overrides to send your params as session attributes; otherwise minimal defaults are sent as prompt attributes.")
+    # Mode toggle
+    st.session_state.use_overrides = st.checkbox(
+        "Use these overrides in calls (send as sessionAttributes & promptSessionAttributes)",
+        value=st.session_state.use_overrides,
+        help="ON → send your fields. OFF → send tiny defaults (brand/channel/lang) so Lambda can inject headers.",
+    )
+
+    st.divider()
+    st.subheader("🔐 Auth")
+    st.caption("Leave JWT empty to rely on Lambda’s STATIC_JWT")
     st.session_state.overrides["jwt"] = st.text_input(
         "JWT (include 'Bearer …' if you want to override)",
         value=st.session_state.overrides.get("jwt", ""),
         placeholder="Bearer eyJhbGciOiJIUzUxMiJ9.…",
     )
 
-# -- line before --
-with st.expander("👤 Customer context — collapsed by default", expanded=False):
-    st.caption("This customerOuid is used by ALL calls. "
-               "For DTO without an ID, Lambda will use this first; if empty, it falls back to the Lambda default.")
+    st.divider()
+    st.subheader("👤 Customer context")
+    st.caption("This customerOuid is used by ALL calls. For DTO without an ID, Lambda will use this first; if empty, it falls back to the Lambda default.")
     st.session_state.overrides["customerOuid"] = st.text_input(
-        "customerOuid (applies to both DTO and goodwill)",
+        "customerOuid",
         value=st.session_state.overrides.get("customerOuid", ""),
-        placeholder="1E5A1F564E180BD3EBF02D7D5007DB28",
+        placeholder=DEFAULT_CUST,
     )
-# -- line after --
 
-with st.expander("🌐 Call context (brand/channel/lang) — collapsed by default", expanded=False):
+    st.divider()
+    st.subheader("🌐 Call context")
     c1, c2, c3 = st.columns(3)
     with c1:
         st.session_state.overrides["xBrand"] = st.text_input(
@@ -145,8 +149,8 @@ with st.expander("🌐 Call context (brand/channel/lang) — collapsed by defaul
             index=0 if (st.session_state.overrides.get("lang", DEFAULT_LANG) == "en") else 1,
         )
 
-with st.expander("🎁 Goodwill parameters — collapsed by default", expanded=False):
-    st.caption("Fill any you want to override. Empty fields are ignored so Lambda defaults or DTO-based resolution still apply.")
+    st.divider()
+    st.subheader("🎁 Goodwill parameters")
     col1, col2 = st.columns(2)
     with col1:
         st.session_state.overrides["parentOuid"] = st.text_input(
@@ -187,12 +191,7 @@ with st.expander("🎁 Goodwill parameters — collapsed by default", expanded=F
             value=st.session_state.overrides.get("goodwillReason", "boosterOrPassRefund"),
             placeholder="refund / boosterOrPassRefund …",
         )
-
-st.session_state.use_overrides = st.checkbox(
-    "Use these overrides in calls (send as sessionAttributes & promptSessionAttributes)",
-    value=st.session_state.use_overrides,
-    help="ON → send your fields. OFF → send tiny defaults (brand/channel/lang) so Lambda can inject headers.",
-)
+# -- line after --
 
 def build_session_attributes() -> dict:
     """
@@ -244,7 +243,6 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
 
 # Render history
 for m in st.session_state.messages:
