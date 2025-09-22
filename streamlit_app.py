@@ -20,7 +20,7 @@ def invoke_agent_stream(prompt: str, session_id: str, session_attrs: dict | None
     """
     Calls Agents for Bedrock and yields chunks as they arrive.
     Uses 'invoke_agent' event stream per AWS docs.
-    If session_attrs is provided, it is sent under sessionState.sessionAttributes.
+    If session_attrs is provided, it is sent under sessionState.[sessionAttributes + promptSessionAttributes].
     """
     client = bedrock_agent_client()
 
@@ -36,8 +36,12 @@ def invoke_agent_stream(prompt: str, session_id: str, session_attrs: dict | None
             "streamFinalResponse": STREAM_FINAL,
         },
     )
+    # >>> CHANGE: mirror into both sessionAttributes and promptSessionAttributes <<<
     if session_attrs:
-        kwargs["sessionState"] = {"sessionAttributes": session_attrs}
+        kwargs["sessionState"] = {
+            "sessionAttributes": session_attrs,            # sticky across turns
+            "promptSessionAttributes": session_attrs,      # visible to the current turn/tools
+        }
     resp = client.invoke_agent(**kwargs)
     # -- line after --
 
@@ -65,11 +69,16 @@ st.set_page_config(page_title="Bedrock Agent Chat", page_icon="🤖", layout="ce
 
 # ---------- Collapsed parameter panels (prefilled & collapsed) ----------
 # Persist values across interactions.
+
+# Prefill customer OUID once (env or hard-coded fallback)
+DEFAULT_CUST = os.getenv("DEFAULT_CUSTOMER_OUID", "1E5A1F564E180BD3EBF02D7D5007DB28")
+
+# Initialize overrides ONCE (no duplicate blocks)
 if "overrides" not in st.session_state:
     st.session_state.overrides = {
         "jwt": "",                    # leave empty to use Lambda STATIC_JWT
         # Global customer context (used by DTO default path AND goodwill)
-        "customerOuid": "",
+        "customerOuid": DEFAULT_CUST,  # prefilled (not just placeholder)
         # Goodwill-specific params (leave empty to let Lambda defaults/DTO resolver win)
         "billingAccountOuid": "",
         "parentOuid": "",
@@ -79,8 +88,10 @@ if "overrides" not in st.session_state:
         "goodwillSizeGb": 2,
         "goodwillReason": "boosterOrPassRefund",
     }
+
+# default to ON so attributes are sent unless you turn them off
 if "use_overrides" not in st.session_state:
-    st.session_state.use_overrides = False
+    st.session_state.use_overrides = True
 
 with st.expander("🔐 Auth (JWT token) — collapsed by default", expanded=False):
     st.caption("Leave empty to rely on Lambda’s STATIC_JWT")
@@ -97,7 +108,7 @@ with st.expander("👤 Customer context — collapsed by default", expanded=Fals
     st.session_state.overrides["customerOuid"] = st.text_input(
         "customerOuid (applies to both DTO and goodwill)",
         value=st.session_state.overrides.get("customerOuid", ""),
-        placeholder="8B0B07E340842EDF73EBD6DE1208C1C3",
+        placeholder="1E5A1F564E180BD3EBF02D7D5007DB28",
     )
 # -- line after --
 
@@ -145,14 +156,14 @@ with st.expander("🎁 Goodwill parameters — collapsed by default", expanded=F
         )
 
 st.session_state.use_overrides = st.checkbox(
-    "Use these overrides in calls (send as sessionAttributes)",
+    "Use these overrides in calls (send as sessionAttributes & promptSessionAttributes)",
     value=st.session_state.use_overrides,
     help="When enabled, only non-empty fields are sent; empty fields are omitted so Lambda defaults can win.",
 )
 
 def build_session_attributes() -> dict:
     """
-    Build sessionAttributes sent to Bedrock.
+    Build session attributes sent to Bedrock.
     - If 'Use these overrides' is OFF -> return {} (nothing sent; Lambda defaults apply).
     - If ON -> include only non-empty fields.
     Critical: customerOuid is global (applies to both DTO and goodwill).
@@ -198,6 +209,10 @@ if "session_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Top banner: show the effective customer OUID being sent
+effective_ouid = st.session_state.overrides.get("customerOuid", "") if st.session_state.use_overrides else "(overrides OFF)"
+st.info(f"Effective customerOuid → {effective_ouid}")
+
 # Render history
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
@@ -242,6 +257,21 @@ if user_input:
         try:
             # -- line before --
             session_attrs = build_session_attributes()
+
+            # Guardrail: if overrides are ON but customerOuid is empty → warn & stop
+            if st.session_state.use_overrides and not session_attrs.get("customerOuid"):
+                st.warning("Overrides are ON but 'customerOuid' is empty. Enter a value or turn overrides OFF.")
+                raise RuntimeError("Missing customerOuid while overrides are enabled.")
+
+            with st.expander("🧪 Debug — what will be sent", expanded=False):
+                st.write({
+                    "sessionId": st.session_state.session_id,
+                    "agentId": AGENT_ID,
+                    "aliasId": ALIAS_ID,
+                    "use_overrides": st.session_state.use_overrides,
+                    "sessionAttributes": session_attrs,   # what we mirror into both
+                })
+
             for chunk in invoke_agent_stream(user_input, st.session_state.session_id, session_attrs):
                 acc += chunk
                 placeholder.markdown(escape_katex(acc) + "▌")
