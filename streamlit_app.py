@@ -4,8 +4,8 @@ import streamlit as st
 import boto3
 from botocore.exceptions import ClientError
 
-AGENT_ID = os.getenv("AGENT_ID", "").strip()         # e.g. A1B2C3...
-ALIAS_ID = os.getenv("AGENT_ALIAS_ID", "").strip()   # e.g. TSTALIASID
+AGENT_ID = os.getenv("AGENT_ID", "NCTQZKII1Y").strip()         # e.g. A1B2C3...
+ALIAS_ID = os.getenv("AGENT_ALIAS_ID", "GDKCKJIYXI").strip()   # e.g. TSTALIASID
 AWS_REGION = os.getenv("AWS_REGION", "eu-west-1")
 
 STREAM_FINAL = os.getenv("STREAM_FINAL_RESPONSE", "true").lower() == "true"
@@ -94,13 +94,13 @@ if "overrides" not in st.session_state:
         "xChannel": DEFAULT_CHANNEL,
     }
 if "use_overrides" not in st.session_state:
-    st.session_state.use_overrides = True
+    st.session_state.use_overrides = False
 
 # =======================
 # ⚙️ UNIFIED SETTINGS UI
 # =======================
 # -- line before --
-with st.expander("⚙️ Settings — collapsed", expanded=False):
+with st.expander("⚙️ Settings", expanded=False):
     st.caption("Configure everything here. Toggle overrides to send your params as session attributes; otherwise minimal defaults are sent as prompt attributes.")
     # Mode toggle
     st.session_state.use_overrides = st.checkbox(
